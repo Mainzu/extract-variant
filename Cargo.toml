@@ -1,0 +1,19 @@
+[package]
+name = "extract-variant"
+version = "0.1.0"
+edition = "2021"
+authors = ["Mainzu"]
+description = "Provide a few proc macros for extracting enum variants into their own structs."
+repository = "https://github.com/Mainzu/extract-variant/"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "1", features = ["full"] }
+variant-traits = { path = "./variant-traits" }
