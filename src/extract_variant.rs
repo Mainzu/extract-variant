@@ -55,7 +55,7 @@ pub fn doit(item_enum: ItemEnum) -> Result<TokenStream> {
     let enum_path = Path::from(item_enum.ident.clone());
 
     // Create a closure to generate modified variant names if prefix or suffix is non-empty
-    let struct_name = if prefix == "" && suffix == "" {
+    let struct_name = if prefix.is_empty() && suffix.is_ascii() {
         None
     } else {
         Some(|variant: &Variant| {
@@ -82,7 +82,7 @@ fn generate_code(
     enum_path: &Path,
 ) -> Result<TokenStream> {
     // Generate a struct for the current variant
-    let mut item_struct = generate_variant(&item_enum, variant, struct_name.map(|sn| sn(variant)));
+    let mut item_struct = generate_variant(item_enum, variant, struct_name.map(|sn| sn(variant)));
     // If the variant has a "variant_attrs" attribute, parse it and add the attributes to the struct
     item_struct.attrs.extend(
         variant
@@ -102,7 +102,7 @@ fn generate_code(
             .filter(|attr| attr.path.is_ident("derive"))
             .cloned(),
     );
-    Ok(if no_impl == false {
+    Ok(if !no_impl {
         // If the "no_impl" flag is not set, generate trait implementations for the struct
         let variant_name = Some(&variant.ident);
         let variant_impl = impl_variant(&item_struct, enum_path, variant_name);

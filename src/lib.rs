@@ -1,182 +1,7 @@
-//! Provide proc macros for extracting enum variants into their own structs.
-//!
-//! # Example
-//! ```rust
-//! use extract_variant::extract_variant;
-//!
-//! #[extract_variant]
-//! enum MyEnum {
-//!     Variant1,
-//!     Variant2(i32, String),
-//!     Variant3 { field1: bool, field2: f32 },
-//! }
-//!
-//! fn main() {
-//!     let variant1 = Variant1;
-//!     let variant2 = Variant2(0, String::from("hello"));
-//!     let variant3 = Variant3 { field1: true, field2: 3.14 };
-//! }
-//! ```
-//!
-//! # Installation
-//! Add the following to your `Cargo.toml`:
-//! ```toml
-//! [dependencies]
-//! extract_variant = "0.1"
-//! ```
-//!
-//! # Usage
-//! This crate provide two main attribute-like procedural macros:
-//! 1. [extract_variant()] is a procedural macro that allows you to extract the variants of an enum
-//! into their own structs. The extracted variants can be used as standalone structs, and have the Into,
-//! TryFrom, and Variant traits automatically implemented for them. `extract_variant` can also accept a
-//! prefix or suffix attribute to customize the names of the generated structs, and a variant_attrs
-//! attribute to add attributes to individual variants. It can be used by adding the `#[extract_variant]`
-//! attribute to an enum definition, and the extracted variants will be available as separate structs
-//! with the same names as the variants in the original enum. `extract_variant` is useful for creating
-//! separate types for each variant of an enum, and can make it easier to work with enums in Rust.
-//!
-//! 2. [variant_of()] is an attribute that allows you to create a struct that corresponds to a variant of an enum.
-//! The struct can be used as a standalone type, and has the [Into][std], [TryFrom][std], and [Variant][variant_traits] traits
-//! automatically implemented for it. 'variant_of' can be used by specifying the `#[variant_of]` attribute
-//! on a struct definition, and specifying the name of the enum that the struct corresponds to in the
-//! parentheses after the attribute. The struct must have the same fields as the variant in the enum,
-//! in the same order. 'variant_of' is useful for creating a struct that corresponds to a specific variant
-//! of an enum, and can make it easier to work with enums in Rust.
-//!
-//! In its simplest form, to use `extract_variant`, simply add the ``` attribute
-//! to the enum that you want to extract the variants from. The variants will then be available
-//! as separate structs with the same names as the variants in the original enum.
-//!
-//! Note that the original enum is not consumed by extract_variant. The original enum is still
-//! available after the variants have been extracted, and can be used as normal.
-//!
-//! ## Custom name
-//! [extract_variant()] allows you to customize the names of the generated structs by specifying
-//! a prefix or suffix attribute. This can be useful if you want to avoid naming conflicts with
-//! existing structs, or if you want to make the generated structs more easily distinguishable
-//! from the original enum.
-//!
-//! To specify a prefix or suffix, add `prefix` or `suffix` to the `extract_variant`
-//! attribute like this: `#[extract_variant(prefix(SomePrefix), suffix(SomeSuffix))]`.
-//! They can be used together or separately.
-//!
-//! Note that both prefix and suffix are optional, and the generated structs will
-//! have the same names as the variants in the original enum if no `prefix` or `suffix` is specified.
-//!
-//! ## Auto implementation
-//! In addition to being available as separate structs, the extracted variants of the enum also have
-//! several traits automatically implemented for them. These traits provide convenient ways to
-//! convert between the enum and its extracted variants, and can be useful in various contexts.
-//!
-//! The following traits are automatically implemented for the extracted variants:
-//! - [Into]\<EnumName\>: This trait allows you to convert an extracted variant into the corresponding
-//! variant of the original enum. For example, if you have an extracted variant `Variant1`,
-//! you can convert it to the `Variant1` variant of the original enum using the `Into` trait like this:
-//! `let enum_variant: EnumName = variant1.into()`.
-//! - [TryFrom]\<EnumName\>: This trait allows you to try to convert a variant of the original enum into
-//! the corresponding extracted variant. If the conversion is successful, it will return the extracted
-//! variant. If the conversion fails, it will return an error of type `EnumName`. For example,
-//! if you have a variant of the original enum `Variant1`, you can try to convert it to the extracted
-//! variant `Variant1` using the `TryFrom` trait like this:
-//! `let result: Result<Variant1, EnumName> = EnumName::try_from(enum_variant)`.
-//! - [Variant][variant_traits::Variant]\<EnumName\>: This trait is a combination of the `Into` and `TryFrom` traits, and requires
-//! that both of these traits are implemented for the extracted variant. It can be useful if you want
-//! to ensure that a certain type can be converted into and out of a variant of an enum in a consistent way.
-//!
-//! If you do not want these traits to be implemented automatically, you can specify `no_impl`
-//! on the `extract_variant` attribute (`#[extract_variant(no_impl)]`).
-//! This can be useful if you want to implement these traits manually
-//!
-//! ## Attributes
-//! Attributes can be added to the generated structs by specifying the
-//! `variant_attrs` attribute on the variant. This can be useful if you want to specify custom
-//! behavior or metadata for the generated structs.
-//!
-//! To specify attributes for a variant, add the `variant_attrs` attribute to the variant like this:
-//! `Variant1(i32, String) #[variant_attrs(attr1, attr2)]`. Multiple attributes can be specified
-//! by separating them with commas.
-//!
-//! For example, if you have an enum `MyEnum` with a variant `Variant1`, and you want to add the
-//! attributes `#[serde(default)]` and `#[cfg(test)]` to the generated struct, you can use the
-//! following variant definition: `Variant1(i32, String) #[variant_attrs(serde(default), cfg(test))]`.
-//!
-//! Note that the `variant_attrs` attribute is optional, and the generated structs will not have any
-//! additional attributes if no `variant_attrs` attribute is specified for the variant. However,
-//! for the common case of `derive` attributes, `extract_variant` provides a convenient shortcut:
-//! any `derive` attributes specified on the enum will also be applied to each of the generated structs.
-//! This can save you the effort of specifying the same `derive` attributes on each variant individually.
-//!
-//! For example, if you have an enum `MyEnum` with a variant `Variant1`, and you want to derive
-//! both `Debug` and `Clone` for the generated struct, you can use the following attribute on the
-//! enum: `#[derive(Debug, Clone)]`. This will apply both the `Debug` and `Clone` derives to the
-//! generated struct for `Variant1`, as well as any other variants in the enum.
-//!
-//! Again, this shortcut only applies to `derive` attributes, and not to other types of attributes.
-//! If you want to apply other types of attributes to the generated structs, you will need to use
-//! the `variant_attrs` attribute on the variant, as described above.
-//!
-//! ## Manually creating variants
-//! In some cases, you may want to manually create a struct that corresponds to a variant of an enum,
-//! without using `extract_variant` to extract the variant automatically. This can be useful if you
-//! want to reuse the same usage pattern for an external enum, or if you want to create a struct that
-//! corresponds to a variant of an enum that cannot be extracted by `extract_variant` (for example,
-//! because it is defined in another crate or has generic parameters).
-//!
-//! To manually create a struct that corresponds to a variant of an enum, you can use the `#[variant_of]`
-//! attribute on the struct definition. This attribute allows you to specify the enum that the struct
-//! corresponds to, and will automatically implement the [Into], [TryFrom], and [Variant][variant_traits::Variant] traits for
-//! the struct.
-//!
-//! For example, to create a struct that corresponds to the `Variant1` variant of an enum `MyEnum`,
-//! you can use the following definition:
-//! ```rust
-//! # use extract_variant::variant_of;
-//! # enum MyEnum {
-//! # Variant1,
-//! # Variant2(i32, String),
-//! # Variant3 { field1: bool, field2: f32 },
-//! # }
-//!
-//! #[variant_of(MyEnum)]
-//! struct Variant1(i32, String);
-//! ```
-//! This will create a struct `Variant1` that corresponds to the `Variant1` variant of the `MyEnum` enum,
-//! and will automatically implement the [Into], [TryFrom], and [Variant] traits for the struct.
-//!
-//! To use the `#[variant_of]` attribute, you must specify the name of the enum that the struct corresponds
-//! to in the parentheses after the attribute. The struct must also have the same fields as the variant in
-//! the enum, in the same order.
-//!
-//! Note that the `#[variant_of]` attribute is separate from the extract_variant procedural macro,
-//! and can be used to create structs that correspond to variants of any enum, regardless of whether
-//! the enum has been extracted by extract_variant or not.
-//!
-//! By default, variant_of assumes that the name of the struct corresponds to the name of the variant
-//! in the enum, and generates the implementation accordingly. However, if you want to create a struct
-//! with a different name from the variant in the enum, you can specify the name of the variant in the
-//! variant_of attribute using the following syntax: #[variant_of(EnumName, VariantName)].
-//!
-//! For example, to create a struct named MyStruct that corresponds to the Variant1 variant of the
-//! MyEnum enum, you can use the following definition:
-//! ```rust
-//! #[variant_of(MyEnum, Variant1)]
-//! struct MyStruct(i32, String);
-//! ```
-//! This will create a struct MyStruct that corresponds to the Variant1 variant of the MyEnum enum,
-//! and will automatically implement the Into, TryFrom, and Variant traits for the struct.
-//!
-//! # Limitations
-//! Currently, `extract_variant` does not support extracting variants from enums with
-//! generic parameters or lifetime parameters. It can only extract variants from enums
-//! that are monomorphic.
-//!
-//! # License
-//! `extract_variant` is licensed under the MIT License.
-//!
-//! Note: This crate's documentation is mostly generated by ChatGPT.
-
-// mod lib;
+#![feature(rustdoc_missing_doc_code_examples)]
+#![deny(rustdoc::missing_doc_code_examples)]
+#![deny(missing_docs)]
+#![doc = include_str!("../README.md")]
 
 extern crate proc_macro;
 extern crate proc_macro2;
@@ -189,23 +14,11 @@ use quote::quote;
 use syn::{
     parenthesized,
     parse::{Parse, ParseStream},
-    parse_macro_input, token, Attribute, Fields, FieldsNamed, FieldsUnnamed, Generics, ItemEnum,
-    ItemStruct, Path, Token, Variant,
+    parse_macro_input, token, Fields, FieldsNamed, FieldsUnnamed, Generics, ItemEnum, ItemStruct,
+    Path, Token, Variant,
 };
 
-#[proc_macro_derive(MyDerive, attributes(helper))]
-pub fn my_derive(input: TokenStream) -> TokenStream {
-    // Parse the input TokenStream into a Rust syntax tree
-    let input = parse_macro_input!(input as syn::DeriveInput);
-
-    // Extract the helper attribute, if it exists
-    let _helper_attr = input.attrs.iter().find(|attr| attr.path.is_ident("helper"));
-
-    // Use the attribute value in the derive implementation
-    // (omitted for brevity)
-    TokenStream::new()
-}
-
+// mod lib;
 mod extract_variant;
 mod variant_of;
 
@@ -228,9 +41,144 @@ struct VariantOf {
     variant_ident: Option<Ident>,
 }
 
-/// A struct that holds the attributes to be applied to a variant when it is extracted by the [extract_variant] procedural macro.
-struct VariantAttrs(Vec<Attribute>);
-
+/// Extracts each variant in an enum into its own standalone struct, then implements conversion traits
+/// between the original enum and the generated struct.
+///
+/// # Example
+/// ```rust, no_run
+/// # use extract_variant::extract_variant;
+/// #[derive(extract_variant)]
+/// enum MyEnum {
+///     UnitVariant,
+///     TupleVariant(i32),
+///     StructVariant { field: f64, },
+/// }
+/// fn main() {
+///     let unit_variant = UnitVariant;
+///     let tuple_variant = TupleVariant(42);
+///     let struct_variant = StructVariant { field: 3.14 };
+/// }
+/// ```
+///
+/// # Auto implementations
+/// In addition to being available as separate structs, the extracted variants of the enum also have
+/// several traits automatically implemented for them. These traits provide convenient ways to
+/// convert between the enum and its extracted variants.
+///
+/// For each variant, `V`, extracted from an enum, `E`, traits [`Into<E>`], [`TryFrom<E, Error = E>`],
+/// and [`Variant<E>`][variant_traits::Variant] are automatically implemented for `V`.
+/// Where [`Variant<E>`][variant_traits::Variant] is just a bare trait that requires the previous two
+/// traits to be implemented. It can be useful if you want to ensure that a certain type can be
+/// converted into and from an enum in a consistent way.
+///
+/// This behavior can be disabled when desired using the `#[no_impl]` attribute.
+/// ```rust, no_run
+/// # use extract_variant::extract_variant;
+/// #[derive(extract_variant)]
+/// #[no_impl]
+/// enum MyEnum {
+///     UnitVariant,
+/// }
+/// # fn main() {
+/// #   let unit_variant = UnitVariant;
+/// # }
+/// ```
+/// ```rust, compile_fail
+/// # use extract_variant::extract_variant;
+/// # #[derive(extract_variant)]
+/// # #[no_impl]
+/// # enum MyEnum {
+/// #     UnitVariant,
+/// # }
+/// # fn main() {
+/// let my_enum = MyEnum::from(UnitVariant); // fails to compile
+/// # }
+/// ```
+/// ```rust, compile_fail
+/// # use extract_variant::extract_variant;
+/// # use extract_variant::extract_variant;
+/// # #[derive(extract_variant)]
+/// # #[no_impl]
+/// # enum MyEnum {
+/// #     UnitVariant,
+/// # }
+/// # fn main() {
+/// let unit_variant = UnitVariant::try_from(MyEnum::UnitVariant); // also fails to compile
+/// # }
+/// ```
+///
+/// # Name customization
+/// The names of the generated structs can be customized by specifying a `#[prefix(...)]`
+/// or `#[suffix(...)]` attribute. This can be useful if you want to avoid naming conflicts
+/// with existing structs or if you want to make the generated structs more easily distinguishable.
+/// They can be used together or separately.
+///
+/// ```rust, no_run
+/// # use extract_variant::extract_variant;
+/// #[derive(extract_variant)]
+/// #[prefix(MyEnum)]
+/// enum MyEnum {
+///     UnitVariant,
+///     TupleVariant(i32),
+///     StructVariant { field: f64, },
+/// }
+/// fn main() {
+///     let unit_variant = MyEnumUnitVariant;
+///     let tuple_variant = MyEnumTupleVariant(42);
+///     let struct_variant = MyEnumStructVariant { field: 3.14 };
+/// }
+/// ```
+///
+/// Note that both the prefix and suffix are optional, and the generated structs will
+/// have the same names as the variants in the original enum if no `prefix` or `suffix` is specified.
+///
+/// # Attributes
+/// Attributes can be added to the generated structs by specifying the #[variant_attrs(...)] attribute
+/// on the desired variant. Apart from this, however, for the common cases of `derive` and `doc`,
+/// a convenient shortcut exists. Firstly, `derive` attributes specified on the enum will be inherited
+/// by all extracted variants. **Important note.[^important note]**
+/// This can save you the effort of specifying the same `derive` attributes on each variant individually.
+/// Secondly, the doc comments of a variant are also passed on to the generated struct.
+///
+/// ```rust, no_run
+/// # use extract_variant::extract_variant;
+/// #[derive(extract_variant, Default)]
+/// // The variants won't derive `Default` since it's in the same block as `extract_variant`
+/// // This comment also serves to prevent a formatter from merging the two `derive` blocks
+/// #[derive(Debug, Clone, Copy, PartialEq)]
+/// enum MyEnum {
+///     #[default]
+///     /// A variant of [MyEnum]
+///     UnitVariant,
+///     /// A variant of [MyEnum]
+///     #[variant_attrs(
+///         #[derive(Eq, PartialOrd, Ord)] // `TupleVariant`'s own derive
+///     )]
+///     TupleVariant(i32),
+///     /// A variant of [MyEnum]
+///     StructVariant { field: f64, },
+/// }
+/// fn main() {
+///     println!("{:?}", UnitVariant);
+///     println!("{:?}", TupleVariant(42));
+///     println!("{:?}", StructVariant { field: 3.14, });
+/// }
+/// ```
+///
+/// [^important note]: Any other traits placed within the same derive block as the `extract_variant`
+/// will NOT be inheritted by the generated structs. Be sure to place the traits you want derived
+/// by the generated structs in another block. The derive block with `extract_variant` will only apply
+/// to the enum.
+/// I did not explicitly implemented this behavior. I am also not knowledgable enough to tell whether is
+/// a garuanteed behavior or not. If the describe behavior no longer applies in the future,
+/// you can assume that it was not garuanteed.
+///
+///
+/// # Limitations
+/// Currently, `extract_variant` does not support extracting variants from enums with
+/// generic parameters or lifetime parameters. It can only extract variants from enums
+/// that are monomorphic.
+///
 #[proc_macro_derive(extract_variant, attributes(prefix, suffix, no_impl, variant_attrs))]
 pub fn extract_variant(input: TokenStream) -> TokenStream {
     match extract_variant::doit(parse_macro_input!(input)) {
@@ -238,7 +186,41 @@ pub fn extract_variant(input: TokenStream) -> TokenStream {
         Err(err) => err.into_compile_error().into(),
     }
 }
-/// Some doc
+
+/// TODO
+///
+/// In some cases, you may want to manually create a struct that corresponds to a variant of an enum,
+/// without using [`extract_variant`][extract_variant()] to extract the variant automatically.
+/// This can be useful if you want to create a struct that corresponds to a variant of an enum
+/// that cannot be extracted by [`extract_variant`][extract_variant()] (for example,
+/// because it is defined in another crate or has generic parameters).
+///
+/// # Example
+/// ```rust, no_run
+/// use extract_variant::Variant;
+///
+/// mod my_mod {
+///     pub enum MyEnum {
+///         UnitVariant,
+///         TupleVariant(i32),
+///         StructVariant { field: f64, },
+///     }   
+/// }
+///
+/// #[derive(Variant)]
+/// #[variant_of(my_mod::MyEnum)]
+/// struct UnitVariant;
+///
+/// #[derive(Variant)]
+/// #[variant_of(my_mod::MyEnum)]
+/// struct TupleVariant(i32);
+///
+/// #[derive(Variant)]
+/// #[variant_of(my_mod::MyEnum)]
+/// struct StructVariant {
+///     field: f64,
+/// }
+/// ```
 #[proc_macro_derive(Variant, attributes(variant_of))]
 pub fn derive_variant(input: TokenStream) -> TokenStream {
     match variant_of::doit(parse_macro_input!(input)) {
@@ -246,99 +228,6 @@ pub fn derive_variant(input: TokenStream) -> TokenStream {
         Err(err) => err.into_compile_error().into(),
     }
 }
-
-// #[proc_macro_attribute]
-// pub fn extract_variant(attr_args: TokenStream, input: TokenStream) -> TokenStream {
-//     let item_enum = parse_macro_input!(input as ItemEnum);
-//     // If the ItemEnum has generic parameters, return a compile-time error
-//     if let Some(lt_token) = item_enum.generics.lt_token {
-//         return Error::new_spanned(
-//             lt_token,
-//             "`extract_variant` does not support generic parameters",
-//         )
-//         .to_compile_error()
-//         .into();
-//     }
-
-//     let ExtractVariant {
-//         prefix,
-//         suffix,
-//         no_impl,
-//     } = parse_macro_input!(attr_args);
-
-//     // Convert the prefix and suffix Ident values to strings, if they are present
-//     let prefix = prefix.map(|id| id.to_string()).unwrap_or_default();
-//     let suffix = suffix.map(|id| id.to_string()).unwrap_or_default();
-
-//     // Keep track of the path to the enum to generate conversion impls
-//     // AI: Create a path to the enum using its identifier
-//     //
-//     // The reason it's a path and not just an identifier is because the function that generate the
-//     // implementations is general. This is to support `variant_of`.
-//     let enum_path = Path::from(item_enum.ident.clone());
-
-//     // Create a closure to generate modified variant names if prefix or suffix is non-empty
-//     let struct_name = if prefix == "" && suffix == "" {
-//         None
-//     } else {
-//         Some(|variant: &Variant| {
-//             Ident::new(
-//                 &format!("{}{}{}", prefix, variant.ident, suffix),
-//                 variant.ident.span(),
-//             )
-//         })
-//     };
-
-//     // Iterate over the variants in the enum
-//     let tss = item_enum.variants.iter().map(|variant| {
-//         // Generate a struct for the current variant
-//         let mut item_struct =
-//             generate_variant(&item_enum, variant, struct_name.map(|sn| sn(variant)));
-//         // If the variant has a "variant_attrs" attribute, parse it and add the attributes to the struct
-//         if let Some(res) = variant
-//             .attrs
-//             .iter()
-//             .find(|attr| attr.path.is_ident("variant_attrs"))
-//             .map(Attribute::parse_args::<VariantAttrs>)
-//         {
-//             match res {
-//                 Err(err) => return err.into_compile_error().into(),
-//                 Ok(VariantAttrs(attrs)) => item_struct.attrs.extend(attrs),
-//             }
-//         }
-//         // If the "no_impl" flag is not set, generate trait implementations for the struct
-//         if no_impl == false {
-//             let variant_name = Some(&variant.ident);
-//             let variant_impl = impl_variant(&item_struct, &enum_path, variant_name);
-//             quote! { #item_struct #variant_impl  }
-//         } else {
-//             // Otherwise, just generate the struct without trait implementations
-//             quote! { #item_struct }
-//         }
-//     });
-
-//     // Collect all of the generated structs and trait implementations into a single TokenStream
-//     let init = quote! { #item_enum };
-//     TokenStream::from(tss.fold(init, |acc, ts| quote! { #acc #ts }))
-// }
-
-// #[proc_macro_attribute]
-// pub fn variant_of(attr_args: TokenStream, input: TokenStream) -> TokenStream {
-//     let item_struct = parse_macro_input!(input as ItemStruct);
-//     let VariantOf {
-//         enum_path,
-//         variant_ident,
-//     } = parse_macro_input!(attr_args as VariantOf);
-
-//     let variant_impl = impl_variant(&item_struct, &enum_path, variant_ident.as_ref());
-
-//     TokenStream::from(quote! { #item_struct #variant_impl })
-// }
-
-// #[proc_macro_attribute]
-// pub fn variant_attrs(_: TokenStream, input: TokenStream) -> TokenStream {
-//     input
-// }
 
 /// Generates a struct definition from a variant of an enum.
 ///
@@ -473,13 +362,6 @@ impl Parse for ExtractVariant {
     }
 }
 
-impl Parse for VariantAttrs {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let content;
-        parenthesized!(content in input);
-        Ok(Self(content.call(Attribute::parse_outer)?))
-    }
-}
 impl Parse for VariantOf {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let enum_path = input.parse()?;

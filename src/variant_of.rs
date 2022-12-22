@@ -12,8 +12,9 @@ pub fn doit(item_struct: ItemStruct) -> Result<TokenStream> {
         .iter()
         .find(|attr| attr.path.is_ident("variant_of"))
         .map(|attr| attr.parse_args::<VariantOf>())
-        .transpose()?
-        .ok_or_else(|| Error::new(Span::call_site(), "Variant require #[variant_of] attribute"))?;
+        .ok_or_else(|| {
+            Error::new(Span::call_site(), "Variant require #[variant_of] attribute")
+        })??;
 
     Ok(impl_variant(
         &item_struct,
