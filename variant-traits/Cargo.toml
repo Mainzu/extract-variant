@@ -3,7 +3,7 @@ name = "variant-traits"
 version = "0.1.0"
 edition = "2021"
 authors = ["Mainzu"]
-description = "Traits for the extract-variant crate."
+description = "Helper crate, providing traits for the extract-variant crate."
 repository = "https://github.com/Mainzu/extract-variant/"
 license = "MIT"
 
