@@ -4,6 +4,7 @@
 //! ```rust
 //! use extract_variant::extract_variant;
 //!
+//! #[extract_variant]
 //! enum MyEnum {
 //!     Variant1,
 //!     Variant2(i32, String),
@@ -130,6 +131,13 @@
 //! For example, to create a struct that corresponds to the `Variant1` variant of an enum `MyEnum`,
 //! you can use the following definition:
 //! ```rust
+//! # use extract_variant::variant_of;
+//! # enum MyEnum {
+//! # Variant1,
+//! # Variant2(i32, String),
+//! # Variant3 { field1: bool, field2: f32 },
+//! # }
+//!
 //! #[variant_of(MyEnum)]
 //! struct Variant1(i32, String);
 //! ```
@@ -176,8 +184,8 @@ extern crate quote;
 extern crate syn;
 
 use proc_macro::TokenStream;
-use proc_macro2::{Ident, Span};
-use quote::quote;
+use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
+use quote::{quote, ToTokens};
 use syn::{
     parenthesized,
     parse::{Parse, ParseStream},
@@ -201,7 +209,7 @@ struct VariantOf {
     /// The path to the enum that the struct corresponds to.
     enum_path: Path,
     /// The name of the variant in the enum that the struct corresponds to.
-    variant_name: Option<Ident>,
+    variant_ident: Option<Ident>,
 }
 
 /// A struct that holds the attributes to be applied to a variant when it is extracted by the [extract_variant] procedural macro.
@@ -212,8 +220,8 @@ pub fn extract_variant(attr_args: TokenStream, input: TokenStream) -> TokenStrea
     let item_enum = parse_macro_input!(input as ItemEnum);
     // If the ItemEnum has generic parameters, return a compile-time error
     if let Some(lt_token) = item_enum.generics.lt_token {
-        return Error::new(
-            lt_token.span,
+        return Error::new_spanned(
+            lt_token,
             "`extract_variant` does not support generic parameters",
         )
         .to_compile_error()
@@ -235,23 +243,25 @@ pub fn extract_variant(attr_args: TokenStream, input: TokenStream) -> TokenStrea
     //
     // The reason it's a path and not just an identifier is because the function that generate the
     // implementations is general. This is to support `variant_of`.
-    let enum_path = Path::from(PathSegment {
-        ident: item_enum.ident.clone(),
-        arguments: PathArguments::None,
-    });
+    let enum_path = Path::from(item_enum.ident.clone());
 
     // Create a closure to generate modified variant names if prefix or suffix is non-empty
-    let variant_name = if prefix == "" && suffix == "" {
+    let struct_name = if prefix == "" && suffix == "" {
         None
     } else {
-        Some(|variant: &Variant| format!("{}{}{}", prefix, variant.ident, suffix))
+        Some(|variant: &Variant| {
+            Ident::new(
+                &format!("{}{}{}", prefix, variant.ident, suffix),
+                variant.ident.span(),
+            )
+        })
     };
 
     // Iterate over the variants in the enum
     let tss = item_enum.variants.iter().map(|variant| {
-        let name = format!("{}{}{}", prefix, variant.ident, suffix);
         // Generate a struct for the current variant
-        let mut strct = generate_variant(&name, &item_enum, variant);
+        let mut item_struct =
+            generate_variant(&item_enum, variant, struct_name.map(|sn| sn(variant)));
         // If the variant has a "variant_attrs" attribute, parse it and add the attributes to the struct
         if let Some(res) = variant
             .attrs
@@ -261,19 +271,17 @@ pub fn extract_variant(attr_args: TokenStream, input: TokenStream) -> TokenStrea
         {
             match res {
                 Err(err) => return err.into_compile_error().into(),
-                Ok(VariantAttrs(attrs)) => strct.attrs.extend(attrs),
+                Ok(VariantAttrs(attrs)) => item_struct.attrs.extend(attrs),
             }
         }
         // If the "no_impl" flag is not set, generate trait implementations for the struct
         if no_impl == false {
-            let variant_name = variant_name
-                .map(|vn| vn(variant))
-                .map(|s| Ident::new(s.as_str(), variant.ident.span()));
-            let variant_impl = impl_variant(&strct, &enum_path, variant_name);
-            quote! { #strct #variant_impl  }
+            let variant_name = Some(&variant.ident);
+            let variant_impl = impl_variant(&item_struct, &enum_path, variant_name);
+            quote! { #item_struct #variant_impl  }
         } else {
             // Otherwise, just generate the struct without trait implementations
-            quote! { #strct }
+            quote! { #item_struct }
         }
     });
 
@@ -287,12 +295,12 @@ pub fn variant_of(attr_args: TokenStream, input: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(input as ItemStruct);
     let VariantOf {
         enum_path,
-        variant_name,
+        variant_ident,
     } = parse_macro_input!(attr_args as VariantOf);
 
-    let strct = &item_struct;
+    let variant_impl = impl_variant(&item_struct, &enum_path, variant_ident.as_ref());
 
-    TokenStream::from(impl_variant(strct, &enum_path, variant_name))
+    TokenStream::from(quote! { #item_struct #variant_impl })
 }
 
 // #[proc_macro_attribute]
@@ -311,12 +319,16 @@ pub fn variant_of(attr_args: TokenStream, input: TokenStream) -> TokenStream {
 /// # Returns
 ///
 /// An `ItemStruct` struct representing the generated struct definition.
-fn generate_variant(name: &str, item_enum: &ItemEnum, variant: &Variant) -> ItemStruct {
+fn generate_variant(
+    item_enum: &ItemEnum,
+    variant: &Variant,
+    struct_name: Option<Ident>,
+) -> ItemStruct {
     ItemStruct {
         attrs: variant.attrs.clone(),
         vis: item_enum.vis.clone(),
         struct_token: token::Struct(variant.ident.span()),
-        ident: Ident::new(name, variant.ident.span()),
+        ident: struct_name.unwrap_or_else(|| variant.ident.clone()),
         generics: Generics::default(),
         fields: variant.fields.clone(),
         semi_token: None,
@@ -327,7 +339,7 @@ fn generate_variant(name: &str, item_enum: &ItemEnum, variant: &Variant) -> Item
 ///
 /// # Parameters
 ///
-/// - `strct`: A reference to an `ItemStruct` struct representing the struct for which the traits should be implemented.
+/// - `item_struct`: A reference to an `ItemStruct` struct representing the struct for which the traits should be implemented.
 /// - `enum_path`: A reference to a `Path` struct representing the path to the enum that the struct corresponds to.
 /// - `variant_name`: An optional `Ident` struct representing the name of the variant in the enum that the struct corresponds to. If this parameter is `None`, the function will use the name of the struct as the name of the variant.
 ///
@@ -335,59 +347,62 @@ fn generate_variant(name: &str, item_enum: &ItemEnum, variant: &Variant) -> Item
 ///
 /// A `TokenStream` representing the generated block of code.
 fn impl_variant(
-    strct: &ItemStruct,
+    item_struct: &ItemStruct,
     enum_path: &Path,
-    variant_name: Option<Ident>,
+    variant_ident: Option<&Ident>,
 ) -> proc_macro2::TokenStream {
-    // Make it usable in a quote! block
-    let strct_ident = &strct.ident;
-    let variant_name = variant_name.as_ref().unwrap_or(&strct.ident);
-
-    let (free, tied) = match &strct.fields {
-        // If the fields are named, bind the names to variables and use them to create the trait implementations
-        Fields::Named(FieldsNamed { named, .. }) => {
-            let names: Vec<&Ident> = named
-                .into_iter()
-                .map(|f| f.ident.as_ref().unwrap())
-                .collect();
-            (
-                quote! { #strct_ident { #(#names),* } },
-                quote! { #variant_name { #(#names),* } },
-            )
-        }
-        // If the fields are unnamed, bind the fields to variables with names like "_0", "_1", etc. and use them to create the trait implementations
-        Fields::Unnamed(FieldsUnnamed { unnamed, .. }) => {
-            let id: Vec<Ident> = (0..unnamed.len())
-                .map(|i| Ident::new(&format!("_{}", i), Span::call_site()))
-                .collect();
-            (
-                quote! { #strct_ident(#(#id),*) },
-                quote! { #variant_name(#(#id),*) },
-            )
-        }
-        // If the fields are a unit type, bind no variables and use them to create the trait implementations
-        Fields::Unit => (quote! { #strct_ident }, quote! { #variant_name }),
-    };
+    let struct_path = Path::from(item_struct.ident.clone());
+    let variant_ident = variant_ident.unwrap_or(&item_struct.ident);
 
     // Create the `From` and `TryFrom` trait implementations
-    let froms = quote! {
-        impl ::std::convert::From<#strct_ident> for #enum_path {
-            fn from(#free: #strct_ident) -> Self {
-                Self::#tied
-            }
-        }
-        impl ::std::convert::TryFrom<#enum_path> for #strct_ident {
-            type Error = #enum_path;
-            fn try_from(value: #enum_path) -> ::std::result::Result<Self, Self::Error> {
-                if let #enum_path::#tied = value { Ok(#free) } else { Err(value) }
-            }
-        }
-    };
+    let froms = impl_froms(
+        &struct_path,
+        enum_path,
+        variant_ident,
+        fields_stream(&item_struct.fields),
+    );
 
     // Return a `TokenStream` containing the trait implementations
     quote! {
         #froms
-        impl ::variant_traits::Variant<#enum_path> for #strct_ident {}
+        impl ::variant_traits::Variant<#enum_path> for #struct_path {}
+    }
+}
+
+fn fields_stream(fields: &Fields) -> TokenStream2 {
+    match fields {
+        // If the fields are named, bind the names to variables and use them to create the trait implementations
+        Fields::Named(FieldsNamed { named, .. }) => {
+            let names = named.into_iter().map(|f| f.ident.as_ref().unwrap());
+            quote! { { #(#names),* } }
+        }
+        // If the fields are unnamed, bind the fields to variables with names like "_0", "_1", etc. and use them to create the trait implementations
+        Fields::Unnamed(FieldsUnnamed { unnamed, .. }) => {
+            let id = (0..unnamed.len()).map(|i| Ident::new(&format!("_{}", i), Span::call_site()));
+            quote! { (#(#id),*) }
+        }
+        // If the fields are a unit type, bind no variables and use them to create the trait implementations
+        Fields::Unit => quote! {},
+    }
+}
+fn impl_froms(
+    struct_path: &Path,
+    enum_path: &Path,
+    variant_ident: &Ident,
+    fields_stream: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    quote! {
+        impl ::std::convert::From<#struct_path> for #enum_path {
+            fn from(#struct_path #fields_stream: #struct_path) -> Self {
+                Self::#variant_ident #fields_stream
+            }
+        }
+        impl ::std::convert::TryFrom<#enum_path> for #struct_path {
+            type Error = #enum_path;
+            fn try_from(value: #enum_path) -> ::std::result::Result<Self, Self::Error> {
+                if let #enum_path::#variant_ident #fields_stream = value { Ok(#struct_path #fields_stream) } else { Err(value) }
+            }
+        }
     }
 }
 
@@ -442,7 +457,7 @@ impl Parse for VariantOf {
         let variant_name = content.parse()?;
         Ok(Self {
             enum_path,
-            variant_name,
+            variant_ident: variant_name,
         })
     }
 }
