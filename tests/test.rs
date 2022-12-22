@@ -1,20 +1,31 @@
-use extract_variant::{extract_variant, variant_of};
+use extract_variant::{extract_variant, Variant};
 
-#[extract_variant]
+#[derive(extract_variant)]
+// #[no_impl]
+// #[prefix(MyEnum)]
+#[derive(Debug)]
 enum MyEnum {
+    #[variant_attrs(
+        #[derive(Default)]
+    )]
     Variant1,
     Variant2(i32, String),
-    Variant3 { field1: bool, field2: f32 },
+    Variant3 {
+        field1: bool,
+        field2: f32,
+    },
 }
 
 enum Hi {
     Ayo,
 }
 
-#[variant_of((Hi,))]
+#[derive(Variant)]
+#[variant_of(Hi, Ayo)]
 struct Ayo;
 
 fn main() {
+    println!("{:?}", Variant1);
     let variant1 = Variant1;
     let variant2 = Variant2(0, String::from("hello"));
     let variant3 = Variant3 {

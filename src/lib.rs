@@ -185,13 +185,29 @@ extern crate syn;
 
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
-use quote::{quote, ToTokens};
+use quote::quote;
 use syn::{
     parenthesized,
     parse::{Parse, ParseStream},
-    parse_macro_input, token, Attribute, Error, Fields, FieldsNamed, FieldsUnnamed, Generics,
-    ItemEnum, ItemStruct, Path, PathArguments, PathSegment, Token, Variant,
+    parse_macro_input, token, Attribute, Fields, FieldsNamed, FieldsUnnamed, Generics, ItemEnum,
+    ItemStruct, Path, Token, Variant,
 };
+
+#[proc_macro_derive(MyDerive, attributes(helper))]
+pub fn my_derive(input: TokenStream) -> TokenStream {
+    // Parse the input TokenStream into a Rust syntax tree
+    let input = parse_macro_input!(input as syn::DeriveInput);
+
+    // Extract the helper attribute, if it exists
+    let _helper_attr = input.attrs.iter().find(|attr| attr.path.is_ident("helper"));
+
+    // Use the attribute value in the derive implementation
+    // (omitted for brevity)
+    TokenStream::new()
+}
+
+mod extract_variant;
+mod variant_of;
 
 /// A struct that holds the configuration for the [extract_variant] procedural macro.
 #[derive(Debug, Default)]
@@ -215,93 +231,109 @@ struct VariantOf {
 /// A struct that holds the attributes to be applied to a variant when it is extracted by the [extract_variant] procedural macro.
 struct VariantAttrs(Vec<Attribute>);
 
-#[proc_macro_attribute]
-pub fn extract_variant(attr_args: TokenStream, input: TokenStream) -> TokenStream {
-    let item_enum = parse_macro_input!(input as ItemEnum);
-    // If the ItemEnum has generic parameters, return a compile-time error
-    if let Some(lt_token) = item_enum.generics.lt_token {
-        return Error::new_spanned(
-            lt_token,
-            "`extract_variant` does not support generic parameters",
-        )
-        .to_compile_error()
-        .into();
+#[proc_macro_derive(extract_variant, attributes(prefix, suffix, no_impl, variant_attrs))]
+pub fn extract_variant(input: TokenStream) -> TokenStream {
+    match extract_variant::doit(parse_macro_input!(input)) {
+        Ok(token_stream) => token_stream.into(),
+        Err(err) => err.into_compile_error().into(),
     }
-
-    let ExtractVariant {
-        prefix,
-        suffix,
-        no_impl,
-    } = parse_macro_input!(attr_args);
-
-    // Convert the prefix and suffix Ident values to strings, if they are present
-    let prefix = prefix.map(|id| id.to_string()).unwrap_or_default();
-    let suffix = suffix.map(|id| id.to_string()).unwrap_or_default();
-
-    // Keep track of the path to the enum to generate conversion impls
-    // AI: Create a path to the enum using its identifier
-    //
-    // The reason it's a path and not just an identifier is because the function that generate the
-    // implementations is general. This is to support `variant_of`.
-    let enum_path = Path::from(item_enum.ident.clone());
-
-    // Create a closure to generate modified variant names if prefix or suffix is non-empty
-    let struct_name = if prefix == "" && suffix == "" {
-        None
-    } else {
-        Some(|variant: &Variant| {
-            Ident::new(
-                &format!("{}{}{}", prefix, variant.ident, suffix),
-                variant.ident.span(),
-            )
-        })
-    };
-
-    // Iterate over the variants in the enum
-    let tss = item_enum.variants.iter().map(|variant| {
-        // Generate a struct for the current variant
-        let mut item_struct =
-            generate_variant(&item_enum, variant, struct_name.map(|sn| sn(variant)));
-        // If the variant has a "variant_attrs" attribute, parse it and add the attributes to the struct
-        if let Some(res) = variant
-            .attrs
-            .iter()
-            .find(|attr| attr.path.is_ident("variant_attrs"))
-            .map(Attribute::parse_args::<VariantAttrs>)
-        {
-            match res {
-                Err(err) => return err.into_compile_error().into(),
-                Ok(VariantAttrs(attrs)) => item_struct.attrs.extend(attrs),
-            }
-        }
-        // If the "no_impl" flag is not set, generate trait implementations for the struct
-        if no_impl == false {
-            let variant_name = Some(&variant.ident);
-            let variant_impl = impl_variant(&item_struct, &enum_path, variant_name);
-            quote! { #item_struct #variant_impl  }
-        } else {
-            // Otherwise, just generate the struct without trait implementations
-            quote! { #item_struct }
-        }
-    });
-
-    // Collect all of the generated structs and trait implementations into a single TokenStream
-    let init = quote! { #item_enum };
-    TokenStream::from(tss.fold(init, |acc, ts| quote! { #acc #ts }))
+}
+/// Some doc
+#[proc_macro_derive(Variant, attributes(variant_of))]
+pub fn derive_variant(input: TokenStream) -> TokenStream {
+    match variant_of::doit(parse_macro_input!(input)) {
+        Ok(token_stream) => token_stream.into(),
+        Err(err) => err.into_compile_error().into(),
+    }
 }
 
-#[proc_macro_attribute]
-pub fn variant_of(attr_args: TokenStream, input: TokenStream) -> TokenStream {
-    let item_struct = parse_macro_input!(input as ItemStruct);
-    let VariantOf {
-        enum_path,
-        variant_ident,
-    } = parse_macro_input!(attr_args as VariantOf);
+// #[proc_macro_attribute]
+// pub fn extract_variant(attr_args: TokenStream, input: TokenStream) -> TokenStream {
+//     let item_enum = parse_macro_input!(input as ItemEnum);
+//     // If the ItemEnum has generic parameters, return a compile-time error
+//     if let Some(lt_token) = item_enum.generics.lt_token {
+//         return Error::new_spanned(
+//             lt_token,
+//             "`extract_variant` does not support generic parameters",
+//         )
+//         .to_compile_error()
+//         .into();
+//     }
 
-    let variant_impl = impl_variant(&item_struct, &enum_path, variant_ident.as_ref());
+//     let ExtractVariant {
+//         prefix,
+//         suffix,
+//         no_impl,
+//     } = parse_macro_input!(attr_args);
 
-    TokenStream::from(quote! { #item_struct #variant_impl })
-}
+//     // Convert the prefix and suffix Ident values to strings, if they are present
+//     let prefix = prefix.map(|id| id.to_string()).unwrap_or_default();
+//     let suffix = suffix.map(|id| id.to_string()).unwrap_or_default();
+
+//     // Keep track of the path to the enum to generate conversion impls
+//     // AI: Create a path to the enum using its identifier
+//     //
+//     // The reason it's a path and not just an identifier is because the function that generate the
+//     // implementations is general. This is to support `variant_of`.
+//     let enum_path = Path::from(item_enum.ident.clone());
+
+//     // Create a closure to generate modified variant names if prefix or suffix is non-empty
+//     let struct_name = if prefix == "" && suffix == "" {
+//         None
+//     } else {
+//         Some(|variant: &Variant| {
+//             Ident::new(
+//                 &format!("{}{}{}", prefix, variant.ident, suffix),
+//                 variant.ident.span(),
+//             )
+//         })
+//     };
+
+//     // Iterate over the variants in the enum
+//     let tss = item_enum.variants.iter().map(|variant| {
+//         // Generate a struct for the current variant
+//         let mut item_struct =
+//             generate_variant(&item_enum, variant, struct_name.map(|sn| sn(variant)));
+//         // If the variant has a "variant_attrs" attribute, parse it and add the attributes to the struct
+//         if let Some(res) = variant
+//             .attrs
+//             .iter()
+//             .find(|attr| attr.path.is_ident("variant_attrs"))
+//             .map(Attribute::parse_args::<VariantAttrs>)
+//         {
+//             match res {
+//                 Err(err) => return err.into_compile_error().into(),
+//                 Ok(VariantAttrs(attrs)) => item_struct.attrs.extend(attrs),
+//             }
+//         }
+//         // If the "no_impl" flag is not set, generate trait implementations for the struct
+//         if no_impl == false {
+//             let variant_name = Some(&variant.ident);
+//             let variant_impl = impl_variant(&item_struct, &enum_path, variant_name);
+//             quote! { #item_struct #variant_impl  }
+//         } else {
+//             // Otherwise, just generate the struct without trait implementations
+//             quote! { #item_struct }
+//         }
+//     });
+
+//     // Collect all of the generated structs and trait implementations into a single TokenStream
+//     let init = quote! { #item_enum };
+//     TokenStream::from(tss.fold(init, |acc, ts| quote! { #acc #ts }))
+// }
+
+// #[proc_macro_attribute]
+// pub fn variant_of(attr_args: TokenStream, input: TokenStream) -> TokenStream {
+//     let item_struct = parse_macro_input!(input as ItemStruct);
+//     let VariantOf {
+//         enum_path,
+//         variant_ident,
+//     } = parse_macro_input!(attr_args as VariantOf);
+
+//     let variant_impl = impl_variant(&item_struct, &enum_path, variant_ident.as_ref());
+
+//     TokenStream::from(quote! { #item_struct #variant_impl })
+// }
 
 // #[proc_macro_attribute]
 // pub fn variant_attrs(_: TokenStream, input: TokenStream) -> TokenStream {
@@ -325,7 +357,7 @@ fn generate_variant(
     struct_name: Option<Ident>,
 ) -> ItemStruct {
     ItemStruct {
-        attrs: variant.attrs.clone(),
+        attrs: Vec::new(),
         vis: item_enum.vis.clone(),
         struct_token: token::Struct(variant.ident.span()),
         ident: struct_name.unwrap_or_else(|| variant.ident.clone()),
@@ -450,14 +482,16 @@ impl Parse for VariantAttrs {
 }
 impl Parse for VariantOf {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let content;
-        parenthesized!(content in input);
-        let enum_path = content.parse()?;
-        content.parse::<Token![,]>()?;
-        let variant_name = content.parse()?;
+        let enum_path = input.parse()?;
+        let variant_ident = if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            Some(input.parse()?)
+        } else {
+            None
+        };
         Ok(Self {
             enum_path,
-            variant_ident: variant_name,
+            variant_ident,
         })
     }
 }
