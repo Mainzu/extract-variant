@@ -15,7 +15,7 @@ use syn::{
     parenthesized,
     parse::{Parse, ParseStream},
     parse_macro_input, token, Fields, FieldsNamed, FieldsUnnamed, Generics, ItemEnum, ItemStruct,
-    Path, Token, Variant,
+    Path, Token, Variant, VisPublic, Visibility,
 };
 
 // mod lib;
@@ -173,13 +173,18 @@ struct VariantOf {
 /// a garuanteed behavior or not. If the describe behavior no longer applies in the future,
 /// you can assume that it was not garuanteed.
 ///
-///
 /// # Limitations
 /// Currently, `extract_variant` does not support extracting variants from enums with
 /// generic parameters or lifetime parameters. It can only extract variants from enums
 /// that are monomorphic.
 ///
-#[proc_macro_derive(extract_variant, attributes(prefix, suffix, no_impl, variant_attrs))]
+/// # TODO
+/// Document `#[exclude]` attribute. Just put it on any variant that shouldn't be extracted.
+///
+#[proc_macro_derive(
+    extract_variant,
+    attributes(prefix, suffix, no_impl, variant_attrs, exclude)
+)]
 pub fn extract_variant(input: TokenStream) -> TokenStream {
     match extract_variant::doit(parse_macro_input!(input)) {
         Ok(token_stream) => token_stream.into(),
@@ -245,13 +250,19 @@ fn generate_variant(
     variant: &Variant,
     struct_name: Option<Ident>,
 ) -> ItemStruct {
+    let mut fields = variant.fields.clone();
+    for field in &mut fields {
+        field.vis = Visibility::Public(VisPublic {
+            pub_token: token::Pub::default(),
+        });
+    }
     ItemStruct {
         attrs: Vec::new(),
         vis: item_enum.vis.clone(),
         struct_token: token::Struct(variant.ident.span()),
         ident: struct_name.unwrap_or_else(|| variant.ident.clone()),
         generics: Generics::default(),
-        fields: variant.fields.clone(),
+        fields,
         semi_token: None,
     }
 }

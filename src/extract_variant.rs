@@ -55,7 +55,7 @@ pub fn doit(item_enum: ItemEnum) -> Result<TokenStream> {
     let enum_path = Path::from(item_enum.ident.clone());
 
     // Create a closure to generate modified variant names if prefix or suffix is non-empty
-    let struct_name = if prefix.is_empty() && suffix.is_ascii() {
+    let struct_name = if prefix.is_empty() && suffix.is_empty() {
         None
     } else {
         Some(|variant: &Variant| {
@@ -69,6 +69,13 @@ pub fn doit(item_enum: ItemEnum) -> Result<TokenStream> {
     item_enum
         .variants
         .iter()
+        .filter(|variant| {
+            variant
+                .attrs
+                .iter()
+                .find(|attr| attr.path.is_ident("exclude"))
+                .is_none()
+        })
         .map(|variant| generate_code(&item_enum, variant, struct_name, no_impl, &enum_path))
         // Collect all of the generated structs and trait implementations into a single TokenStream
         .try_fold(quote! {}, |acc, ts| ts.map(|ts| quote! { #acc #ts }))
@@ -83,23 +90,42 @@ fn generate_code(
 ) -> Result<TokenStream> {
     // Generate a struct for the current variant
     let mut item_struct = generate_variant(item_enum, variant, struct_name.map(|sn| sn(variant)));
+
+    let mut variant_attrs_iter = variant
+        .attrs
+        .iter()
+        .filter(|attr| attr.path.is_ident("variant_attrs"));
+    let variant_attrs = variant_attrs_iter.next();
+
+    if let Some(duplicate) = variant_attrs_iter.next() {
+        return Err(Error::new_spanned(
+            duplicate.pound_token,
+            "duplicate #[variant_attrs] attribute",
+        ));
+    }
+
     // If the variant has a "variant_attrs" attribute, parse it and add the attributes to the struct
     item_struct.attrs.extend(
-        variant
-            .attrs
-            .iter()
-            .find(|attr| attr.path.is_ident("variant_attrs"))
+        variant_attrs
             .map(|attr| attr.parse_args_with(Attribute::parse_outer))
             .transpose()?
             .into_iter()
             .flatten(),
     );
-    // Shortcut
+    // Shortcut 1
     item_struct.attrs.extend(
         item_enum
             .attrs
             .iter()
             .filter(|attr| attr.path.is_ident("derive"))
+            .cloned(),
+    );
+    // Shortcut 2
+    item_struct.attrs.extend(
+        variant
+            .attrs
+            .iter()
+            .filter(|attr| attr.path.is_ident("doc"))
             .cloned(),
     );
     Ok(if !no_impl {
